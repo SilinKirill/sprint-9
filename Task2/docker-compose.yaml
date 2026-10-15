@@ -1,0 +1,128 @@
+# Merge with Task1/docker-compose.yaml; all relative paths use Task1 as base.
+x-airflow: &airflow
+  build: ../Task2/airflow
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_demo@airflow-db/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: local-demo-airflow-webserver-key
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    SOURCE_DSN: postgresql://etl_source:etl_source_demo@source-db/sources
+    CLICKHOUSE_URL: http://clickhouse:8123
+    CLICKHOUSE_PASSWORD: reports_etl_demo
+  volumes:
+    - ../Task2/airflow/dags:/opt/airflow/dags:ro
+    - ../Task2/airflow/tools:/opt/airflow/tools:ro
+    - ../Task2/airflow/tests:/opt/airflow/tests:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    airflow-init:
+      condition: service_completed_successfully
+    source-db:
+      condition: service_healthy
+    clickhouse:
+      condition: service_healthy
+
+services:
+  bionicpro-auth:
+    environment:
+      REPORTS_API_URL: http://reports-api:8001
+
+  source-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sources
+      POSTGRES_USER: source_admin
+      POSTGRES_PASSWORD: source_admin_demo
+    volumes:
+      - source-data:/var/lib/postgresql/data
+      - ../Task2/sources/init.sql:/docker-entrypoint-initdb.d/01-sources.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source_admin -d sources"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.1.4.35
+    environment:
+      CLICKHOUSE_USER: reports_admin
+      CLICKHOUSE_PASSWORD: reports_admin_demo
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ../Task2/clickhouse/init.sql:/docker-entrypoint-initdb.d/01-reports.sql:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "reports_admin", "--password", "reports_admin_demo", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  reports-api:
+    build: ../Task2/reports-api
+    environment:
+      KEYCLOAK_ISSUER: https://localhost:8443/realms/reports-realm
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/reports-realm/protocol/openid-connect/certs
+      OIDC_AUDIENCE: bionicpro-auth
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: reports_reader
+      CLICKHOUSE_PASSWORD: reports_reader_demo
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  airflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow_demo
+    volumes:
+      - airflow-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  airflow-init:
+    <<: *airflow
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: airflow_demo
+    command: version
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+
+  airflow-scheduler:
+    <<: *airflow
+    command: scheduler
+
+  airflow-webserver:
+    <<: *airflow
+    command: webserver
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  demo-data:
+    <<: *airflow
+    profiles: ["tools"]
+    environment:
+      SOURCE_DSN: postgresql://source_admin:source_admin_demo@source-db/sources
+    entrypoint: ["python", "/opt/airflow/tools/seed_demo.py"]
+    depends_on:
+      source-db:
+        condition: service_healthy
+
+volumes:
+  source-data:
+  clickhouse-data:
+  airflow-data:
+  airflow-logs:
