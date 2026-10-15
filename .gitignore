@@ -1,2 +1,29 @@
-/postgres-keycloak-data
-2024__yandex-architecture-sso.code-workspace
+# IDE
+.idea/
+.ide/
+.gigaide/
+.vscode/
+*.code-workspace
+
+# Build / local tools
+node_modules/
+build/
+target/
+coverage/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Local settings / data
+.env
+.env.local
+.env.*.local
+.local/
+/postgres-keycloak-data/
+
+# OS / logs / temp
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
