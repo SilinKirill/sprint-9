@@ -1,11 +1,11 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReportPage from './ReportPage';
-import { ApiError, getProviders, getReport, getSession } from '../api';
+import { ApiError, getProviders, getReport, getReportFile, getSession } from '../api';
 
 jest.mock('../api', () => ({
   ...jest.requireActual('../api'),
-  getProviders: jest.fn(), getSession: jest.fn(), getReport: jest.fn(),
+  getProviders: jest.fn(), getSession: jest.fn(), getReport: jest.fn(), getReportFile: jest.fn(),
 }));
 
 let element;
@@ -42,7 +42,8 @@ function downloadButton() {
 }
 
 test('authenticated user downloads the prepared report', async () => {
-  (getReport).mockResolvedValue({ from: '2026-10-15', to: '2026-10-15', daily: [] });
+  (getReport).mockResolvedValue({ from: '2026-10-15', to: '2026-10-15', url: '/reports/files/test.json' });
+  getReportFile.mockResolvedValue(new Blob(['{"daily":[]}'], { type: 'application/json' }));
   URL.createObjectURL = jest.fn(() => 'blob:report');
   URL.revokeObjectURL = jest.fn();
   const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
@@ -50,6 +51,7 @@ test('authenticated user downloads the prepared report', async () => {
   expect(downloadButton()?.disabled).toBe(false);
   await act(async () => { downloadButton()?.click(); });
   expect(getReport).toHaveBeenCalledWith('', '');
+  expect(getReportFile).toHaveBeenCalledWith('/reports/files/test.json');
   expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
   expect(click).toHaveBeenCalledTimes(1);
   expect(element.textContent).toContain('скачан');

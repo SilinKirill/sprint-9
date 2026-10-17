@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.bionicpro.reports.config.SecurityConfig;
 import com.bionicpro.reports.controller.ReportController;
 import com.bionicpro.reports.repository.ReportRepository;
+import com.bionicpro.reports.storage.ReportStorage;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -42,6 +43,7 @@ import tools.jackson.databind.json.JsonMapper;
 class ReportSecurityTest {
     private final JsonMapper json = JsonMapper.builder().build();
     private final ReportRepository repository = mock(ReportRepository.class);
+    private final ReportStorage storage = mock(ReportStorage.class);
     private final LocalDate yesterday = LocalDate.now(ZoneOffset.UTC).minusDays(1);
     private RSAKey key;
     private HttpServer jwks;
@@ -68,6 +70,7 @@ class ReportSecurityTest {
         context.setServletContext(new MockServletContext());
         context.addBeanFactoryPostProcessor(factory -> {
             factory.registerSingleton("reportRepository", repository);
+            factory.registerSingleton("reportStorage", storage);
             factory.registerSingleton("jwtDecoder", new SecurityConfig().jwtDecoder(
                 "http://127.0.0.1:" + jwks.getAddress().getPort() + "/certs", "https://issuer", "bionicpro-auth"));
         });
@@ -127,7 +130,7 @@ class ReportSecurityTest {
             .thenReturn(json.readTree("[{\"prosthesis_id\":\"alice-device\"}]"));
         String body = mvc.perform(get("/reports").header("Authorization", "Bearer " + token("alice", "")))
             .andReturn().getResponse().getContentAsString();
-        assertTrue(body.contains("alice-device"));
+        assertTrue(body.contains("/reports/files/v1/"));
         assertFalse(body.contains("bob-device"));
         verify(repository).report(eq("alice"), eq(yesterday), eq(yesterday), any());
         assertEquals(404, mvc.perform(get("/reports").header("Authorization", "Bearer " + token("bob", "")))
@@ -151,7 +154,7 @@ class ReportSecurityTest {
         org.springframework.mock.web.MockHttpServletResponse response = mvc.perform(get("/reports")
             .header("Authorization", authorization)).andReturn().getResponse();
         assertEquals(200, response.getStatus());
-        assertTrue(response.getContentAsString().contains("own-yandex-device"));
+        assertTrue(response.getContentAsString().contains("/reports/files/v1/"));
         assertEquals(400, mvc.perform(get("/reports").param("user_id", "alice")
             .header("Authorization", authorization)).andReturn().getResponse().getStatus());
     }
@@ -177,5 +180,40 @@ class ReportSecurityTest {
                 .header("Authorization", "Bearer " + token("alice", ""))).andReturn().getResponse().getStatus());
         }
         verifyNoInteractions(repository);
+    }
+
+    @Test
+    void reusesS3AndChecksOwnerAndGenerationBeforeDownload() throws Exception {
+        when(repository.report(eq("alice"), any(), any(), any()))
+            .thenReturn(json.readTree("[{\"prosthesis_id\":\"alice-device\"}]"));
+        String authorization = "Bearer " + token("alice", "");
+        String first = mvc.perform(get("/reports").header("Authorization", authorization))
+            .andReturn().getResponse().getContentAsString();
+        String url = json.readTree(first).get("url").asText();
+        String key = url.substring("/reports/files/".length());
+        verify(storage).save(eq(key), any(byte[].class));
+        when(storage.exists(key)).thenReturn(true);
+        when(storage.origin(key)).thenReturn("http://minio:9000/reports/" + key + "?signature=private");
+        String second = mvc.perform(get("/reports").header("Authorization", authorization))
+            .andReturn().getResponse().getContentAsString();
+        assertEquals(first, second);
+        verify(repository, times(1)).report(anyString(), any(), any(), any());
+        assertEquals(204, mvc.perform(get(url).header("Authorization", authorization))
+            .andReturn().getResponse().getStatus());
+        assertEquals(401, mvc.perform(get(url)).andReturn().getResponse().getStatus());
+        assertEquals(404, mvc.perform(get(url).header("Authorization", "Bearer " + token("bob", "")))
+            .andReturn().getResponse().getStatus());
+        assertEquals(400, mvc.perform(get(url).param("user_id", "alice").header("Authorization", authorization))
+            .andReturn().getResponse().getStatus());
+        when(repository.periods()).thenReturn(Map.of(yesterday, "new-batch"));
+        assertEquals(409, mvc.perform(get(url).header("Authorization", authorization))
+            .andReturn().getResponse().getStatus());
+        String updated = mvc.perform(get("/reports").header("Authorization", authorization))
+            .andReturn().getResponse().getContentAsString();
+        assertNotEquals(first, updated);
+        verify(repository, times(2)).report(anyString(), any(), any(), any());
+        when(repository.periods()).thenReturn(Map.of());
+        assertEquals(409, mvc.perform(get(url).header("Authorization", authorization))
+            .andReturn().getResponse().getStatus());
     }
 }

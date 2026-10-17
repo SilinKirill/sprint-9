@@ -16,7 +16,7 @@ let queue: Promise<void> = Promise.resolve();
 let sessionRequest: Promise<Session | null> | null = null;
 
 // Cookie rotates after each protected request, so the next request waits for it.
-function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+function request<T>(path: string, options: RequestInit = {}, blob = false): Promise<T> {
   const result = queue.then(async () => {
     const headers = new Headers(options.headers);
     headers.set('Accept', 'application/json');
@@ -44,6 +44,7 @@ function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
 
     if (response.status === 204) return undefined as T;
+    if (blob) return await response.blob() as T;
     const data = await response.json();
     if (typeof data.csrfToken === 'string') csrfToken = data.csrfToken;
     return data as T;
@@ -84,9 +85,15 @@ export interface Report {
   }>;
 }
 
-export const getReport = (from: string, to: string) => request<Report>(
+export const getReport = (from: string, to: string) => request<{ from: string; to: string; url: string }>(
   `/reports${from || to ? `?${new URLSearchParams({ from, to })}` : ''}`,
 );
+export const getReportFile = (url: string): Promise<Blob> => {
+  if (!/^\/reports\/files\/v1\/[a-f0-9]{64}\/\d{4}-\d{2}-\d{2}\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.json$/.test(url)) {
+    return Promise.reject(new ApiError(502, 'Недействительная ссылка на отчёт.'));
+  }
+  return request<Blob>(url, {}, true);
+};
 export const saveConsent = (accepted: boolean) => request<Session>('/auth/consent', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },

@@ -52,7 +52,7 @@ public class SecurityConfig {
             .requestCache(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(requests -> requests
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
-                .requestMatchers(HttpMethod.GET, "/reports").authenticated()
+                .requestMatchers(HttpMethod.GET, "/reports", "/reports/files/**").authenticated()
                 .anyRequest().denyAll())
             .oauth2ResourceServer(server -> server.jwt(jwt -> {}))
             .headers(headers -> headers.cacheControl(cache -> {}))

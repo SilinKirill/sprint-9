@@ -41,7 +41,8 @@ class LiveReportTest {
         assertEquals("demo-other", other.get(0).get("client_id").asText());
         assertTrue(repository.report("not-a-crm-user", day, day, periods).isEmpty());
 
-        ReportController controller = new ReportController(repository);
+        ReportController controller = new ReportController(repository,
+            org.mockito.Mockito.mock(com.bionicpro.reports.storage.ReportStorage.class));
         Jwt identity = Jwt.withTokenValue("validated-by-security-layer").header("alg", "RS256").subject(subject).build();
         LinkedMultiValueMap<String, String> dates = new LinkedMultiValueMap<>();
         dates.add("from", day.toString());

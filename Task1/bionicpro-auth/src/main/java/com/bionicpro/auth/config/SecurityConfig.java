@@ -50,7 +50,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(requests -> requests
                 .requestMatchers(HttpMethod.GET, "/health", "/auth/providers", "/auth/login", "/auth/callback")
                     .permitAll()
-                .requestMatchers(HttpMethod.GET, "/auth/session", "/api/me", "/reports")
+                .requestMatchers(HttpMethod.GET, "/auth/session", "/api/me", "/reports", "/reports/files/**")
                     .authenticated()
                 .requestMatchers(HttpMethod.POST, "/auth/consent", "/auth/logout")
                     .authenticated()
@@ -82,7 +82,8 @@ public class SecurityConfig {
 
         @Override
         protected boolean shouldNotFilter(HttpServletRequest request) {
-            return !PROTECTED_PATHS.contains(request.getRequestURI());
+            return !PROTECTED_PATHS.contains(request.getRequestURI())
+                && !request.getRequestURI().startsWith("/reports/files/");
         }
 
         @Override

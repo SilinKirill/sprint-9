@@ -91,6 +91,8 @@ public class AuthSecurityTest {
     private int refreshCount;
     private int externalCallCount;
     private int reportStatus = 200;
+    private int downloadStatus = 204;
+    private int cdnRequests;
     private boolean refreshFails;
     private boolean logoutFails;
     private boolean yandexLogin;
@@ -124,7 +126,7 @@ public class AuthSecurityTest {
         context.setServletContext(new MockServletContext());
         context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("authService", auth));
         context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton(
-            "reportProxyController", new ReportProxyController(upstreamUrl)));
+            "reportProxyController", new ReportProxyController(upstreamUrl, upstreamUrl)));
         context.register(TestWeb.class, AuthController.class, SecurityConfig.class);
         context.refresh();
         mvc = MockMvcBuilders.webAppContextSetup(context)
@@ -178,6 +180,22 @@ public class AuthSecurityTest {
             } else if (path.endsWith("/logout")) {
                 status = logoutFails ? 503 : 200;
                 responseBody = Map.of();
+            } else if (path.startsWith("/reports/files/")) {
+                assertTrue(exchange.getRequestHeaders().getFirst("Authorization").startsWith("Bearer "));
+                if (downloadStatus == 204) {
+                    exchange.getResponseHeaders().set("X-Report-Origin", "http://minio:9000/reports/test?signature=private");
+                    exchange.sendResponseHeaders(204, -1);
+                    return;
+                }
+                status = downloadStatus;
+                responseBody = Map.of("detail", "Report unavailable");
+            } else if (path.startsWith("/v1/")) {
+                cdnRequests++;
+                assertNull(exchange.getRequestHeaders().getFirst("Authorization"));
+                assertNull(exchange.getRequestHeaders().getFirst("Cookie"));
+                assertTrue(exchange.getRequestHeaders().getFirst("X-Report-Origin").contains("signature=private"));
+                exchange.getResponseHeaders().set("X-Report-Cache", cdnRequests == 1 ? "MISS" : "HIT");
+                responseBody = Map.of("daily", List.of(Map.of("prosthesis_id", "own-device")));
             } else if (path.equals("/reports")) {
                 status = reportStatus;
                 assertTrue(exchange.getRequestHeaders().getFirst("Authorization").startsWith("Bearer "));
@@ -345,6 +363,35 @@ public class AuthSecurityTest {
             .andReturn().getResponse();
         assertEquals(400, rejected.getStatus());
         assertNotEquals(sessionId(response), sessionId(rejected));
+    }
+
+    @Test
+    void cachedDownloadStillRequiresSessionAndApiAuthorization() throws Exception {
+        String path = "/reports/files/v1/" + "a".repeat(64) + "/2026-10-15/2026-10-15/" + "b".repeat(64) + ".json";
+        assertEquals(401, mvc.perform(get(path)).andReturn().getResponse().getStatus());
+        String session = login();
+        for (String cache : List.of("MISS", "HIT")) {
+            MockHttpServletResponse response = mvc.perform(get(path)
+                .cookie(new Cookie(SessionCookies.SESSION_COOKIE, session))).andReturn().getResponse();
+            assertEquals(200, response.getStatus());
+            assertEquals(cache, response.getHeader("X-Report-Cache"));
+            assertEquals("no-store", response.getHeader("Cache-Control"));
+            assertNull(response.getHeader("X-Report-Origin"));
+            assertFalse(response.getContentAsString().contains("signature"));
+            assertNotEquals(session, sessionId(response));
+            session = sessionId(response);
+        }
+        for (int status : List.of(404, 409, 503, 401)) {
+            downloadStatus = status;
+            MockHttpServletResponse response = mvc.perform(get(path)
+                .cookie(new Cookie(SessionCookies.SESSION_COOKIE, session))).andReturn().getResponse();
+            assertEquals(status == 401 ? 502 : status, response.getStatus());
+            session = sessionId(response);
+            assertEquals(2, cdnRequests);
+        }
+        assertEquals(401, mvc.perform(get(path)).andReturn().getResponse().getStatus());
+        assertEquals(2, cdnRequests);
+        assertEquals(200, getSession(session).getStatus());
     }
 
     @ParameterizedTest

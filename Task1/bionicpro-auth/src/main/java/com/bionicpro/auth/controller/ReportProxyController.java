@@ -25,9 +25,51 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReportProxyController {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final String apiUrl;
+    private final String cdnUrl;
 
-    public ReportProxyController(@Value("${REPORTS_API_URL:http://reports-api:8001}") String apiUrl) {
+    public ReportProxyController(@Value("${REPORTS_API_URL:http://reports-api:8001}") String apiUrl,
+                                 @Value("${REPORTS_CDN_URL:http://reports-cdn:8080}") String cdnUrl) {
         this.apiUrl = apiUrl;
+        this.cdnUrl = cdnUrl;
+    }
+
+    @GetMapping("/reports/files/**")
+    public ResponseEntity<?> download(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        if (request.getQueryString() != null || !path.matches(
+                "/reports/files/v1/[a-f0-9]{64}/\\d{4}-\\d{2}-\\d{2}/\\d{4}-\\d{2}-\\d{2}/[a-f0-9]{64}\\.json")) {
+            return failure(400, "Недействительная ссылка на отчёт.");
+        }
+        AuthService.Ticket ticket = (AuthService.Ticket) request.getAttribute(AuthService.Ticket.class.getName());
+        HttpRequest authorization = HttpRequest.newBuilder(URI.create(apiUrl + path))
+            .timeout(Duration.ofSeconds(30))
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + ticket.session().getAccessToken()).GET().build();
+        try {
+            // This check runs before every CDN request, including cache hits.
+            HttpResponse<byte[]> access = http.send(authorization, HttpResponse.BodyHandlers.ofByteArray());
+            if (access.statusCode() == 401) return failure(502, "Сервис отчётов отклонил запрос. Повторите позже.");
+            if (access.statusCode() != 204) {
+                return ResponseEntity.status(access.statusCode()).header(HttpHeaders.CACHE_CONTROL, "no-store")
+                    .contentType(MediaType.APPLICATION_JSON).body(access.body());
+            }
+            String origin = access.headers().firstValue("X-Report-Origin").orElse("");
+            if (origin.isEmpty()) return failure(502, "Ссылка на файл недоступна.");
+            HttpRequest download = HttpRequest.newBuilder(URI.create(cdnUrl + path.substring("/reports/files".length())))
+                .timeout(Duration.ofSeconds(40)).header("X-Report-Origin", origin).GET().build();
+            HttpResponse<byte[]> file = http.send(download, HttpResponse.BodyHandlers.ofByteArray());
+            if (file.statusCode() != 200) return failure(503, "Файл отчёта недоступен. Повторите позже.");
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("X-Report-Cache", file.headers().firstValue("X-Report-Cache").orElse(""))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=report.json")
+                .body(file.body());
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return failure(503, "Сервис отчётов недоступен. Повторите позже.");
+        } catch (IOException error) {
+            return failure(503, "Сервис отчётов недоступен. Повторите позже.");
+        }
     }
 
     @GetMapping("/reports")
