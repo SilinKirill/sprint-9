@@ -6,4 +6,4 @@
 
 [Задание 3: MinIO, повторное использование отчётов и кеш Nginx](Task3/README.md).
 
-Задание 4 не реализовано.
+[Задание 4: Debezium, Kafka, KafkaEngine и новая витрина отчётности](Task4/README.md).

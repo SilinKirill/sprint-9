@@ -24,7 +24,8 @@ class LiveReportTest {
             "reports_reader", "reports_reader_demo");
         String subject = System.getenv("TEST_REPORT_SUBJECT");
         assertNotNull(subject);
-        LocalDate day = LocalDate.now(ZoneOffset.UTC).minusDays(1);
+        LocalDate day = System.getenv("TEST_REPORT_DAY") == null
+            ? LocalDate.now(ZoneOffset.UTC).minusDays(1) : LocalDate.parse(System.getenv("TEST_REPORT_DAY"));
         Map<LocalDate, String> periods = repository.periods();
         assertTrue(periods.containsKey(day));
         JsonNode rows = repository.report(subject, day, day, periods);
@@ -50,8 +51,8 @@ class LiveReportTest {
         ResponseEntity<?> response = controller.report(identity, dates);
         assertEquals(200, response.getStatusCode().value());
         assertEquals("no-store", response.getHeaders().getCacheControl());
-        dates.set("from", day.plusDays(1).toString());
-        dates.set("to", day.plusDays(1).toString());
+        dates.set("from", LocalDate.now(ZoneOffset.UTC).toString());
+        dates.set("to", LocalDate.now(ZoneOffset.UTC).toString());
         ResponseStatusException notReady = assertThrows(ResponseStatusException.class,
             () -> controller.report(identity, dates));
         assertEquals(409, notReady.getStatusCode().value());

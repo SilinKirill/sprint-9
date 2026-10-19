@@ -41,8 +41,10 @@ class LiveStorageTest {
         try {
             ReportController controller = new ReportController(repository, storage);
             LinkedMultiValueMap<String, String> dates = new LinkedMultiValueMap<>();
-            dates.add("from", LocalDate.now(ZoneOffset.UTC).minusDays(2).toString());
-            dates.add("to", LocalDate.now(ZoneOffset.UTC).minusDays(1).toString());
+            LocalDate day = System.getenv("TEST_REPORT_DAY") == null
+                ? LocalDate.now(ZoneOffset.UTC).minusDays(1) : LocalDate.parse(System.getenv("TEST_REPORT_DAY"));
+            dates.add("from", day.minusDays(1).toString());
+            dates.add("to", day.toString());
             Map<?, ?> report = (Map<?, ?>) controller.report(identity, dates).getBody();
             String url = report.get("url").toString();
             Path snapshot = Path.of("/verification/report-url.txt");
@@ -62,6 +64,59 @@ class LiveStorageTest {
             HttpResponse<String> cached = download(url, authorize(controller, identity, url));
             assertEquals("HIT", cached.headers().firstValue("X-Report-Cache").orElseThrow());
             assertEquals(file.body(), cached.body());
+            Files.writeString(snapshot, url);
+        } finally {
+            storage.close();
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "TEST_CDC_SUBJECT", matches = ".+")
+    void usesActualCdcPublication() throws Exception {
+        ReportRepository repository = spy(new ReportRepository("http://clickhouse:8123",
+            "reports_reader", System.getenv("TEST_CLICKHOUSE_PASSWORD")));
+        String subject = System.getenv("TEST_CDC_SUBJECT");
+        Jwt identity = Jwt.withTokenValue("verified").header("alg", "RS256").subject(subject).build();
+        ReportStorage storage = new ReportStorage(System.getenv("TEST_S3_ENDPOINT"),
+            System.getenv("REPORTS_S3_ACCESS_KEY"), System.getenv("REPORTS_S3_SECRET_KEY"), "reports");
+        try {
+            ReportController controller = new ReportController(repository, storage);
+            LinkedMultiValueMap<String, String> dates = new LinkedMultiValueMap<>();
+            dates.add("from", System.getenv("TEST_REPORT_DAY"));
+            dates.add("to", System.getenv("TEST_REPORT_DAY"));
+            Path snapshot = Path.of("/verification/cdc-url.txt");
+            String stage = System.getenv("TEST_CDC_STAGE");
+            if ("revoked".equals(stage)) {
+                String oldUrl = Files.readString(snapshot);
+                assertEquals(409, assertThrows(ResponseStatusException.class,
+                    () -> authorize(controller, identity, oldUrl)).getStatusCode().value());
+                assertEquals(404, assertThrows(ResponseStatusException.class,
+                    () -> controller.report(identity, dates)).getStatusCode().value());
+                Jwt newOwner = Jwt.withTokenValue("verified").header("alg", "RS256")
+                    .subject(subject + "-new").build();
+                assertEquals(200, controller.report(newOwner, dates).getStatusCode().value());
+                return;
+            }
+            String url = ((Map<?, ?>) controller.report(identity, dates).getBody()).get("url").toString();
+            if ("updated".equals(stage)) {
+                String oldUrl = Files.readString(snapshot);
+                assertNotEquals(oldUrl, url);
+                assertEquals(409, assertThrows(ResponseStatusException.class,
+                    () -> authorize(controller, identity, oldUrl)).getStatusCode().value());
+            }
+            HttpResponse<String> first = download(url, authorize(controller, identity, url));
+            assertEquals(200, first.statusCode());
+            assertEquals("MISS", first.headers().firstValue("X-Report-Cache").orElseThrow());
+            assertTrue(first.body().contains("updated".equals(stage) ? "CDC updated" : "CDC initial"));
+            clearInvocations(repository);
+            assertEquals(url, ((Map<?, ?>) controller.report(identity, dates).getBody()).get("url"));
+            verify(repository, never()).report(anyString(), any(), any(), any());
+            HttpResponse<String> cached = download(url, authorize(controller, identity, url));
+            assertEquals("HIT", cached.headers().firstValue("X-Report-Cache").orElseThrow());
+            assertEquals(first.body(), cached.body());
+            Jwt stranger = Jwt.withTokenValue("verified").header("alg", "RS256").subject(subject + "-stranger").build();
+            assertEquals(404, assertThrows(ResponseStatusException.class,
+                () -> authorize(controller, stranger, url)).getStatusCode().value());
             Files.writeString(snapshot, url);
         } finally {
             storage.close();

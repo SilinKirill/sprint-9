@@ -1,4 +1,4 @@
-"""Daily CRM + telemetry ETL. Only the publication makes a batch visible to API."""
+"""Load complete telemetry days; ClickHouse combines them with CDC CRM data."""
 import json
 import os
 import time
@@ -42,29 +42,22 @@ def prepare_report(data_interval_start, data_interval_end, **_):
     with psycopg2.connect(os.environ["SOURCE_DSN"]) as connection:
         connection.set_session(readonly=True, isolation_level="REPEATABLE READ")
         with connection.cursor(name="daily_report", cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            # Aggregate at the source; stream only per-client/device daily metrics.
+            # CRM is delivered by Debezium. No CRM scan or JOIN at the source.
             cursor.execute("""
-                SELECT c.user_id, c.client_id, c.display_name, p.prosthesis_id, p.model,
-                       count(m.event_id) AS samples,
-                       count(m.event_id) FILTER (WHERE m.successful) AS successful_movements,
-                       avg(m.response_ms) AS avg_response_ms,
-                       min(m.battery_pct) AS min_battery_pct
-                FROM crm.clients c
-                JOIN crm.prostheses p ON p.client_id = c.client_id
-                LEFT JOIN telemetry.measurements m ON m.prosthesis_id = p.prosthesis_id
-                    AND m.recorded_at >= %s AND m.recorded_at < %s
-                    AND m.recorded_at >= p.assigned_at
-                WHERE p.assigned_at < %s
-                GROUP BY c.user_id, c.client_id, c.display_name, p.prosthesis_id, p.model
-                ORDER BY c.user_id, p.prosthesis_id
-            """, (start, end, end))
+                SELECT event_id, prosthesis_id, recorded_at, response_ms, battery_pct,
+                       successful::integer AS successful
+                FROM telemetry.measurements
+                WHERE recorded_at >= %s AND recorded_at < %s
+                ORDER BY recorded_at, event_id
+            """, (start, end))
             while rows := cursor.fetchmany(1000):
                 for row in rows:
+                    row['recorded_at'] = row['recorded_at'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')
                     row.update(report_date=day, batch_id=batch)
-                clickhouse("INSERT INTO reports.daily_reports FORMAT JSONEachRow", rows)
+                clickhouse("INSERT INTO reports.telemetry_daily FORMAT JSONEachRow", rows)
 
     # This is the final operation; an empty source also has a processed period.
-    clickhouse("INSERT INTO reports.completed_periods FORMAT JSONEachRow", [{
+    clickhouse("INSERT INTO reports.telemetry_periods FORMAT JSONEachRow", [{
         "report_date": day, "batch_id": batch, "version": time.time_ns(),
     }])
 

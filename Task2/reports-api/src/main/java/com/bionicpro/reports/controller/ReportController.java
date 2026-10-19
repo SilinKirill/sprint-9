@@ -50,6 +50,7 @@ public class ReportController {
         String key = key(identity.getSubject(), period);
         if (!storage.exists(key)) {
             JsonNode rows = reports.report(identity.getSubject(), period.from(), period.to(), period.batches());
+            ensureCurrent(period);
             if (rows.isEmpty()) {
                 throw problem(HttpStatus.NOT_FOUND, "За обработанный период нет данных о ваших протезах в CRM.");
             }
@@ -59,6 +60,7 @@ public class ReportController {
             storage.save(key, json.writeValueAsBytes(Map.of("from", period.from(), "to", period.to(),
                 "timezone", "UTC", "daily", rows)));
         }
+        ensureCurrent(period);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "no-store")
             .body(Map.of("from", period.from(), "to", period.to(), "url", "/reports/files/" + key));
     }
@@ -82,6 +84,7 @@ public class ReportController {
             throw problem(HttpStatus.CONFLICT, "Отчёт обновлён. Запросите новую ссылку.");
         }
         if (!storage.exists(requested)) throw problem(HttpStatus.NOT_FOUND, "Отчёт не найден.");
+        ensureCurrent(period);
         return ResponseEntity.noContent().header(HttpHeaders.CACHE_CONTROL, "no-store")
             .header("X-Report-Origin", storage.origin(requested)).build();
     }
@@ -89,12 +92,21 @@ public class ReportController {
     private record Period(LocalDate from, LocalDate to, Map<LocalDate, String> batches) {}
 
     private String key(String subject, Period period) {
-        StringBuilder generations = new StringBuilder("v1\n");
+        StringBuilder generations = new StringBuilder("v1:cdc\n");
         for (LocalDate day = period.from(); !day.isAfter(period.to()); day = day.plusDays(1)) {
             generations.append(day).append(':').append(period.batches().get(day)).append('\n');
         }
         return "v1/" + hash(subject) + "/" + period.from() + "/" + period.to()
             + "/" + hash(generations.toString()) + ".json";
+    }
+
+    private void ensureCurrent(Period period) {
+        Map<LocalDate, String> current = reports.periods();
+        for (LocalDate day = period.from(); !day.isAfter(period.to()); day = day.plusDays(1)) {
+            if (!period.batches().get(day).equals(current.get(day))) {
+                throw problem(HttpStatus.CONFLICT, "Отчёт обновлён. Запросите новую ссылку.");
+            }
+        }
     }
 
     private String hash(String value) {

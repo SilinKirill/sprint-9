@@ -183,6 +183,16 @@ class ReportSecurityTest {
     }
 
     @Test
+    void changedViewCannotBeSavedUnderEarlierVersion() throws Exception {
+        when(repository.periods()).thenReturn(Map.of(yesterday, "before"), Map.of(yesterday, "after"));
+        when(repository.report(eq("alice"), any(), any(), any()))
+            .thenReturn(json.readTree("[{\"prosthesis_id\":\"alice-device\"}]"));
+        assertEquals(409, mvc.perform(get("/reports").header("Authorization", "Bearer " + token("alice", "")))
+            .andReturn().getResponse().getStatus());
+        verify(storage, never()).save(anyString(), any(byte[].class));
+    }
+
+    @Test
     void reusesS3AndChecksOwnerAndGenerationBeforeDownload() throws Exception {
         when(repository.report(eq("alice"), any(), any(), any()))
             .thenReturn(json.readTree("[{\"prosthesis_id\":\"alice-device\"}]"));

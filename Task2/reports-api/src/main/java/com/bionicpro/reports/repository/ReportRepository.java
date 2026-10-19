@@ -38,9 +38,10 @@ public class ReportRepository {
 
     public Map<LocalDate, String> periods() {
         JsonNode rows = query("""
-            SELECT report_date, argMax(toString(batch_id), version) AS batch_id
-            FROM reports.completed_periods
-            GROUP BY report_date ORDER BY report_date DESC LIMIT 3660
+            SELECT report_date, batch_id
+            FROM reports.daily_reports_cdc
+            WHERE is_period = 1 AND cdc_checked_at >= now('UTC') - INTERVAL 60 SECOND
+            ORDER BY report_date DESC LIMIT 3660
             FORMAT JSON
             """, Map.of());
         Map<LocalDate, String> periods = new LinkedHashMap<>();
@@ -60,15 +61,15 @@ public class ReportRepository {
         for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
             String key = "batch" + index++;
             parameters.put(key, periods.get(day));
-            batches.add("{" + key + ":UUID}");
+            batches.add("{" + key + ":String}");
         }
         return query("""
             SELECT report_date, client_id, display_name, prosthesis_id, model,
                    samples, successful_movements, avg_response_ms, min_battery_pct
-            FROM reports.daily_reports
+            FROM reports.daily_reports_cdc
             WHERE user_id = {subject:String}
               AND report_date BETWEEN {from:Date} AND {to:Date}
-              AND batch_id IN (%s)
+              AND batch_id IN (%s) AND is_period = 0
             ORDER BY report_date, prosthesis_id
             LIMIT 10001 FORMAT JSON
             """.formatted(String.join(",", batches)), parameters);
