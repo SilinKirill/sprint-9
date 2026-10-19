@@ -44,9 +44,11 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -87,6 +89,7 @@ public class AuthSecurityTest {
     private String nonce = "";
     private String tokenCorruption = "";
     private String profileId = "external-42";
+    private String subject = "user-1";
     private int tokenLifetime = 120;
     private int refreshCount;
     private int externalCallCount;
@@ -97,6 +100,9 @@ public class AuthSecurityTest {
     private boolean logoutFails;
     private boolean yandexLogin;
     private Map<String, String> tokenForm;
+    private volatile boolean holdDownload;
+    private final CountDownLatch downloadStarted = new CountDownLatch(1);
+    private final CountDownLatch releaseDownload = new CountDownLatch(1);
 
     @BeforeEach
     void setup() throws Exception {
@@ -190,6 +196,10 @@ public class AuthSecurityTest {
                 status = downloadStatus;
                 responseBody = Map.of("detail", "Report unavailable");
             } else if (path.startsWith("/v1/")) {
+                if (holdDownload) {
+                    downloadStarted.countDown();
+                    assertTrue(releaseDownload.await(10, TimeUnit.SECONDS));
+                }
                 cdnRequests++;
                 assertNull(exchange.getRequestHeaders().getFirst("Authorization"));
                 assertNull(exchange.getRequestHeaders().getFirst("Cookie"));
@@ -239,7 +249,7 @@ public class AuthSecurityTest {
         JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
                 .issuer(issuer)
                 .audience(audience)
-                .subject("user-1")
+                .subject(subject)
                 .issueTime(Date.from(Instant.ofEpochSecond(issuedAt)))
                 .expirationTime(Date.from(Instant.ofEpochSecond(issuedAt + lifetime)))
                 .claim("typ", idToken ? "ID" : "Bearer")
@@ -392,6 +402,36 @@ public class AuthSecurityTest {
         assertEquals(401, mvc.perform(get(path)).andReturn().getResponse().getStatus());
         assertEquals(2, cdnRequests);
         assertEquals(200, getSession(session).getStatus());
+    }
+
+    @Test
+    void slowDownloadDoesNotBlockAnotherUserOrSessionReplayCheck() throws Exception {
+        String downloadingSession = login();
+        subject = "user-2";
+        String otherSession = login();
+        String path = "/reports/files/v1/" + "a".repeat(64) + "/2026-10-15/2026-10-15/" + "b".repeat(64) + ".json";
+        holdDownload = true;
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<MockHttpServletResponse> download = executor.submit(() -> mvc.perform(get(path)
+                .cookie(new Cookie(SessionCookies.SESSION_COOKIE, downloadingSession))).andReturn().getResponse());
+            try {
+                assertTrue(downloadStarted.await(5, TimeUnit.SECONDS));
+                Future<MockHttpServletResponse> other = executor.submit(() -> getSession(otherSession));
+                MockHttpServletResponse response = other.get(3, TimeUnit.SECONDS);
+                assertEquals(200, response.getStatus());
+                assertTrue(response.getContentAsString().contains("user-2"));
+                assertNotEquals(otherSession, sessionId(response));
+                assertFalse(download.isDone());
+                Future<MockHttpServletResponse> replay = executor.submit(() -> getSession(downloadingSession));
+                assertEquals(401, replay.get(3, TimeUnit.SECONDS).getStatus());
+            } finally {
+                releaseDownload.countDown();
+            }
+            MockHttpServletResponse response = download.get(5, TimeUnit.SECONDS);
+            assertEquals(200, response.getStatus());
+            assertNotEquals(downloadingSession, sessionId(response));
+            assertEquals(200, getSession(sessionId(response)).getStatus());
+        }
     }
 
     @ParameterizedTest

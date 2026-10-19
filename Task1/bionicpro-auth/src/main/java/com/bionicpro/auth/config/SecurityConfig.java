@@ -89,23 +89,22 @@ public class SecurityConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
-            synchronized (auth) {
-                AuthService.Ticket ticket;
-                try {
-                    ticket = authenticate(request);
-                } catch (AuthException error) {
-                    failure(response, error.getStatus(), error.getMessage());
-                    return;
-                }
+            AuthService.Ticket ticket;
+            try {
+                ticket = authenticate(request);
+            } catch (AuthException error) {
+                failure(response, error.getStatus(), error.getMessage());
+                return;
+            }
 
-                request.setAttribute(TICKET, ticket);
-                setSecurityContext(ticket.session());
-                writeRotatedCookie(request, response, ticket);
-                try {
-                    chain.doFilter(request, response);
-                } finally {
-                    SecurityContextHolder.clearContext();
-                }
+            request.setAttribute(TICKET, ticket);
+            setSecurityContext(ticket.session());
+            writeRotatedCookie(request, response, ticket);
+            // Session rotation is synchronized by AuthService; downstream I/O is independent.
+            try {
+                chain.doFilter(request, response);
+            } finally {
+                SecurityContextHolder.clearContext();
             }
         }
 

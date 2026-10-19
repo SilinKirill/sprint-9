@@ -197,7 +197,9 @@ public final class AuthService {
     }
 
     public void logout(Ticket ticket) {
-        sessions.remove(ticket.id());
+        synchronized (this) {
+            sessions.remove(ticket.id());
+        }
         identityProvider.logout(tokenCipher.decrypt(ticket.session().getEncryptedRefreshToken()));
     }
 
