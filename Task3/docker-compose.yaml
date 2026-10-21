@@ -1,0 +1,84 @@
+# Paths are relative to Task1, the first Compose file.
+services:
+  bionicpro-auth:
+    environment:
+      REPORTS_CDN_URL: http://reports-cdn:8080
+    networks: [default, report-files]
+
+  reports-api:
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: reports
+      S3_ACCESS_KEY: ${REPORTS_S3_ACCESS_KEY:?Run Compose setup first}
+      S3_SECRET_KEY: ${REPORTS_S3_SECRET_KEY:?Run Compose setup first}
+    networks: [default, report-files]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Run Compose setup first}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Run Compose setup first}
+      MINIO_BROWSER: "off"
+      MINIO_SKIP_CLIENT: "yes"
+    volumes:
+      - minio-data:/bitnami/minio/data
+    networks: [report-files]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+    entrypoint: ["/bin/sh", "/setup/init.sh"]
+    environment:
+      MC_CONFIG_DIR: /tmp/mc
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      REPORTS_S3_ACCESS_KEY: ${REPORTS_S3_ACCESS_KEY}
+      REPORTS_S3_SECRET_KEY: ${REPORTS_S3_SECRET_KEY}
+    volumes:
+      - ../Task3/minio:/setup:ro
+    networks: [report-files]
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  reports-cdn:
+    image: nginx:1.28-alpine
+    volumes:
+      - ../Task3/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - reports-cache:/var/cache/nginx/reports
+    networks: [report-files]
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  reports-tests:
+    profiles: [tools]
+    build:
+      context: ../Task2/reports-api
+      target: build
+    command: ["mvn", "-B", "-q", "-Dtest=LiveStorageTest", "test"]
+    environment:
+      TEST_S3_ENDPOINT: http://minio:9000
+      REPORTS_S3_ACCESS_KEY: ${REPORTS_S3_ACCESS_KEY}
+      REPORTS_S3_SECRET_KEY: ${REPORTS_S3_SECRET_KEY}
+    networks: [default, report-files]
+
+networks:
+  report-files:
+    internal: true
+
+volumes:
+  minio-data:
+  reports-cache:

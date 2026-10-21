@@ -1,0 +1,7 @@
+name: sprint-9
+
+services:
+  setup:
+    build: ./setup
+    volumes:
+      - .:/workspace
