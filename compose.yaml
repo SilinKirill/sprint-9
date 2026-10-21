@@ -1,0 +1,12 @@
+name: sprint-9
+
+include:
+  - path:
+      - Task1/docker-compose.yaml
+      - Task2/docker-compose.yaml
+      - Task3/docker-compose.yaml
+      - Task4/docker-compose.yaml
+    env_file:
+      - Task1/.env
+      - Task3/.env
+      - Task4/.env

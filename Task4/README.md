@@ -24,26 +24,38 @@
 
 ## Запуск и проверка
 
-Нужны Docker Desktop с Linux-контейнерами и настроенные и запущенные Task1/Task3. Команды PowerShell выполняются **из корня репозитория**:
+Запустите проект по [корневому README](../README.md#запуск). Служебные контейнеры автоматически создают топики, применяют SQL PostgreSQL и ClickHouse, регистрируют Debezium и переносят готовые периоды. API и планировщик Airflow запускаются после успешной подготовки.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Task4\setup.ps1
-$dc = @('--env-file', 'Task1/.env', '--env-file', 'Task3/.env', '--env-file', 'Task4/.env', '-f', 'Task1/docker-compose.yaml', '-f', 'Task2/docker-compose.yaml', '-f', 'Task3/docker-compose.yaml', '-f', 'Task4/docker-compose.yaml')
-docker compose @dc up -d --build --no-deps reports-api airflow-scheduler airflow-webserver
-docker compose @dc exec -T airflow-scheduler python /opt/airflow/task4/migrate_periods.py
-docker compose @dc exec -T kafka-connect curl -fsS http://localhost:8083/connectors/bionicpro-crm/status
+Проверить состояние коннектора из корня репозитория:
+
+```sh
+docker compose exec -T kafka-connect curl -fsS http://localhost:8083/connectors/bionicpro-crm/status
 ```
 
-Настройка повторяемая: существующие секреты, replication slot, смещения и volumes сохраняются. Скрипт миграции загружает телеметрию только для ранее подготовленных суток, которых ещё нет в новой витрине. Для новых дат используется DAG по [инструкции Task2](../Task2/README.md#подготовка-данных) с `$dc` выше.
+Коннектор и его единственная задача должны быть `RUNNING`. Настройка повторяемая: существующие секреты, replication slot, смещения и volumes сохраняются. Скрипт миграции загружает телеметрию только для ранее подготовленных суток, которых ещё нет в новой витрине. Для новых дат используется DAG по [инструкции Task2](../Task2/README.md#подготовка-данных).
 
 Приложение: [https://localhost:8443](https://localhost:8443). Airflow: [http://localhost:8081](http://localhost:8081).
 
-В UI дважды скачайте отчёт за готовые сутки: ссылка одинакова, повторный запрос — `HIT`. После изменения CRM дождитесь обновления витрины без запуска Airflow и получите новую ссылку, `MISS`, затем `HIT`; старая ссылка — `409`. Без входа ожидается `401`, чужой файл — `404`, неготовые сутки — `409`.
+После подготовки данных командой `demo-data` дважды скачайте отчёт за выведенные ею даты: ссылка одинакова, повторный запрос — `HIT`. Затем из корня репозитория измените модель одного протеза:
+
+```sh
+docker compose exec -T source-db psql -U source_admin -d sources -c "UPDATE crm.prostheses SET model='BionicPRO Manual' WHERE prosthesis_id='demo-client-prosthesis-1';"
+```
+
+Подождите 20 секунд и скачайте тот же период без повторного запуска Airflow. В JSON должна появиться модель `BionicPRO Manual`, ссылка изменится, первый запрос файла даст `X-Report-Cache: MISS`, повторный — `HIT`. Старая ссылка возвращает `409`.
+
+После проверки вернуть исходную модель демонстрационного протеза:
+
+```sh
+docker compose exec -T source-db psql -U source_admin -d sources -c "UPDATE crm.prostheses SET model='BionicPRO Demo' WHERE prosthesis_id='demo-client-prosthesis-1';"
+```
+
+Без входа ожидается `401`, чужой файл — `404`, неготовые сутки — `409`.
 
 ## Основные файлы
 
-- `docker-compose.yaml`, `setup.ps1` — развёртывание и повторяемое применение настроек.
-- `debezium/`, `sources/cdc.sql` — connector и настройки PostgreSQL.
+- `docker-compose.yaml`, `kafka/init.sh` — развёртывание, порядок подготовки и топики Kafka.
+- `debezium/`, `sources/cdc.sql` — connector, его автоматическая регистрация и настройки PostgreSQL.
 - `clickhouse/cdc.sql` — KafkaEngine, приём событий и Materialized View витрины.
 - `../Task2/airflow/`, `airflow/migrate_periods.py` — загрузка телеметрии и перенос готовых периодов.
 - `../Task2/reports-api/` — чтение новой витрины и обновление сохранённых отчётов.

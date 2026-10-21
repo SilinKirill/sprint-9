@@ -87,7 +87,7 @@ def apply_flows(flows):
 def apply_component(component, parent, provider_type):
     endpoint = REALM + "/components"
     existing = next((item for item in call("GET", endpoint + "?" + urlencode({"parent": parent}))
-                     if item["name"] == component["name"]
+                     if item.get("name") == component["name"]
                      and item["providerId"] == component["providerId"]), None)
     model = {key: value for key, value in component.items() if key != "subComponents"}
     model["parentId"] = parent
@@ -98,7 +98,7 @@ def apply_component(component, parent, provider_type):
     else:
         call("POST", endpoint, model)
     saved = next(item for item in call("GET", endpoint + "?" + urlencode({"parent": parent}))
-                 if item["name"] == model["name"] and item["providerId"] == model["providerId"])
+                 if item.get("name") == model["name"] and item["providerId"] == model["providerId"])
     for child_type, children in component.get("subComponents", {}).items():
         for child in children:
             apply_component(child, saved["id"], child_type)

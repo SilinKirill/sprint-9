@@ -23,7 +23,7 @@ services:
     environment:
       LDAP_ORGANISATION: BionicPRO
       LDAP_DOMAIN: example.com
-      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?Run scripts/setup.ps1 first}
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:?Run docker compose -f compose.setup.yaml run --rm --build setup first}
       LDAP_TLS: "true"
       LDAP_TLS_ENFORCE: "true"
       LDAP_TLS_VERIFY_CLIENT: never
@@ -55,7 +55,7 @@ services:
       KC_HOSTNAME_ADMIN_URL: https://localhost:8443
       KC_PROXY: edge
       KC_HEALTH_ENABLED: "true"
-      BIONICPRO_CLIENT_SECRET: ${BIONICPRO_CLIENT_SECRET:?Run scripts/setup.ps1 first}
+      BIONICPRO_CLIENT_SECRET: ${BIONICPRO_CLIENT_SECRET:?Run docker compose -f compose.setup.yaml run --rm --build setup first}
       LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
       YANDEX_ENABLED: ${YANDEX_ENABLED:-false}
       YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
@@ -92,8 +92,8 @@ services:
       - ./.local/token-encryption.key:/run/secrets/token-encryption.key:ro
       - auth-data:/data
     depends_on:
-      keycloak:
-        condition: service_healthy
+      keycloak-setup:
+        condition: service_completed_successfully
 
   frontend:
     build: ./frontend
@@ -107,7 +107,6 @@ services:
 
   keycloak-setup:
     image: python:3.12-slim
-    profiles: ["tools"]
     command: ["python", "/setup/provision.py"]
     environment:
       KEYCLOAK_URL: http://keycloak:8080

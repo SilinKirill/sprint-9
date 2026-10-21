@@ -3,15 +3,73 @@ services:
   airflow-scheduler:
     volumes:
       - ../Task4/airflow:/opt/airflow/task4:ro
+    depends_on:
+      telemetry-migrate:
+        condition: service_completed_successfully
+      kafka-connect-init:
+        condition: service_completed_successfully
 
   airflow-webserver:
     volumes:
       - ../Task4/airflow:/opt/airflow/task4:ro
 
+  reports-api:
+    depends_on:
+      telemetry-migrate:
+        condition: service_completed_successfully
+      kafka-connect-init:
+        condition: service_completed_successfully
+
+  demo-data:
+    depends_on:
+      telemetry-migrate:
+        condition: service_completed_successfully
+      kafka-connect-init:
+        condition: service_completed_successfully
+
   source-db:
     command: [postgres, -c, wal_level=logical, -c, max_replication_slots=4, -c, max_wal_senders=4]
     environment:
-      CDC_PASSWORD: ${CDC_PASSWORD:?Run Task4/setup.ps1}
+      CDC_PASSWORD: ${CDC_PASSWORD:?Run Compose setup first}
+
+  source-cdc-init:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: source_admin_demo
+      CDC_PASSWORD: ${CDC_PASSWORD}
+    entrypoint: [psql, -h, source-db, -U, source_admin, -d, sources, -f, /setup/cdc.sql]
+    volumes:
+      - ../Task4/sources/cdc.sql:/setup/cdc.sql:ro
+    depends_on:
+      source-db:
+        condition: service_healthy
+
+  clickhouse-cdc-init:
+    image: clickhouse/clickhouse-server:26.1.4.35
+    entrypoint: [clickhouse-client, --host, clickhouse, --user, reports_admin, --password, reports_admin_demo, --multiquery, --queries-file, /setup/cdc.sql]
+    volumes:
+      - ../Task4/clickhouse/cdc.sql:/setup/cdc.sql:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  telemetry-migrate:
+    build: ../Task2/airflow
+    entrypoint: [python, /opt/airflow/task4/migrate_periods.py]
+    environment:
+      SOURCE_DSN: postgresql://etl_source:etl_source_demo@source-db/sources
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: reports_etl_demo
+    volumes:
+      - ../Task2/airflow/dags:/opt/airflow/dags:ro
+      - ../Task4/airflow:/opt/airflow/task4:ro
+    depends_on:
+      source-db:
+        condition: service_healthy
+      clickhouse-cdc-init:
+        condition: service_completed_successfully
 
   kafka:
     image: apache/kafka:3.9.1
@@ -39,6 +97,15 @@ services:
       timeout: 10s
       retries: 30
 
+  kafka-init:
+    image: apache/kafka:3.9.1
+    entrypoint: [sh, /setup/init.sh]
+    volumes:
+      - ../Task4/kafka:/setup:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   kafka-connect:
     image: quay.io/debezium/connect:3.3.1.Final
     environment:
@@ -63,10 +130,21 @@ services:
       timeout: 5s
       retries: 30
     depends_on:
-      kafka:
+      kafka-init:
+        condition: service_completed_successfully
+      source-cdc-init:
+        condition: service_completed_successfully
+
+  kafka-connect-init:
+    image: python:3.12-slim
+    command: [python, /config/register.py]
+    volumes:
+      - ../Task4/debezium:/config:ro
+    depends_on:
+      kafka-connect:
         condition: service_healthy
-      source-db:
-        condition: service_healthy
+      clickhouse-cdc-init:
+        condition: service_completed_successfully
 
 volumes:
   kafka-data:

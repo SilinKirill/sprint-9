@@ -39,7 +39,7 @@ services:
       - source-data:/var/lib/postgresql/data
       - ../Task2/sources/init.sql:/docker-entrypoint-initdb.d/01-sources.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U source_admin -d sources"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U source_admin -d sources"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -83,7 +83,7 @@ services:
     volumes:
       - airflow-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "airflow"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -115,11 +115,17 @@ services:
     <<: *airflow
     profiles: ["tools"]
     environment:
+      <<: *airflow-env
       SOURCE_DSN: postgresql://source_admin:source_admin_demo@source-db/sources
-    entrypoint: ["python", "/opt/airflow/tools/seed_demo.py"]
+      KEYCLOAK_DB_DSN: postgresql://keycloak_user:keycloak_password@keycloak_db/keycloak_db
+    entrypoint: ["python", "/opt/airflow/tools/prepare_demo.py"]
     depends_on:
       source-db:
         condition: service_healthy
+      keycloak-setup:
+        condition: service_completed_successfully
+      airflow-init:
+        condition: service_completed_successfully
 
 volumes:
   source-data:

@@ -26,17 +26,7 @@ MinIO и постоянный том данных описаны в [docker-comp
 
 ## Запуск и проверка
 
-Нужны Docker Desktop с Linux-контейнерами и настроенный Task1 по [его инструкции](../Task1/README.md). Все команды PowerShell выполняются **из корня репозитория в одном окне терминала**.
-
-**Для текущей версии проекта с Task4 используйте [инструкцию запуска Task4](../Task4/README.md#запуск-и-проверка) и определённый там `$dc`.** Команды ниже описывают запуск этапа Task1–3; для текущих API и Airflow дополнительно нужна витрина Task4.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Task3\setup.ps1
-$dc = @('--env-file', 'Task1/.env', '--env-file', 'Task3/.env', '-f', 'Task1/docker-compose.yaml', '-f', 'Task2/docker-compose.yaml', '-f', 'Task3/docker-compose.yaml')
-docker compose @dc up -d --build
-```
-
-Скрипт создаёт локальный `Task3/.env` с ключами доступа; если файл уже существует, его содержимое сохраняется. Секреты исключены из Git. Данные подготавливаются по [инструкции Task2](../Task2/README.md#подготовка-данных) с использованием переменной `$dc` из команд выше.
+Запуск всех сервисов описан в [корневом README](../README.md#запуск). Контейнер `setup` создаёт локальный `Task3/.env` с ключами доступа и сохраняет существующие значения. `minio-init` автоматически создаёт приватный бакет и настраивает права. Секреты исключены из Git. Данные подготавливаются по [инструкции Task2](../Task2/README.md#подготовка-данных).
 
 - Приложение: [https://localhost:8443](https://localhost:8443).
 - Airflow: [http://localhost:8081](http://localhost:8081).
@@ -49,14 +39,14 @@ docker compose @dc up -d --build
 
 Автоматическая проверка сохранения отчётов, повторного использования S3 и обновления кеша Nginx:
 
-```powershell
-docker compose @dc run --rm --build --no-deps reports-tests
+```sh
+docker compose run --rm --build --no-deps reports-tests
 ```
 
 ## Основные файлы
 
 - `docker-compose.yaml` — MinIO, CDN и подключение к сервисам Task1/Task2.
 - `nginx/nginx.conf` — reverse proxy и кеш файлов отчётов.
-- `minio/`, `setup.ps1` — приватный бакет, права доступа и локальные настройки.
+- `minio/`, `../setup/` — приватный бакет, права доступа и локальные настройки.
 - `../Task2/reports-api/` — работа с S3, ссылки и проверка версии отчёта.
 - `../Task1/bionicpro-auth/`, `../Task1/frontend/` — защищённое скачивание через BFF и интерфейс.
